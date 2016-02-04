@@ -34,6 +34,24 @@ Definition Integrator (init : R) : Arrow R R :=
     exists deriv_pf : forall {t}, t >= 0 -> derivable_pt o t,
       forall t (pf : t >= 0), i t = derive_pt o t (deriv_pf pf).
 
+Definition StateFlow {I O S : Type}
+           (trans : S -> I -> S)
+           (out : S -> I -> O)
+           (init : S)
+: Arrow I O :=
+  fun i o =>
+    exists st : Signal S,
+         st 0 = init
+      /\ (forall t : R, out (st t) (i t) = o t)
+      /\ (forall t : R,
+             exists epsilon : R, epsilon > 0 /\
+               forall t' : R, t < t' <= t + epsilon ->
+                 st t' = trans (st t) (i t)).
+
+
+
+
+
 Definition If {T} : Arrow (bool * T * T) T :=
   fun i o =>
     forall t, let '(test, tr, fa) := i t in
