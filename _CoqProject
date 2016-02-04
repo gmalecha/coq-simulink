@@ -1,3 +1,4 @@
 -Q theories Simulink
+-Q coq-ext-lib/theories ExtLib
 
 ./theories/Simulink.v
