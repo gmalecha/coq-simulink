@@ -170,6 +170,55 @@ Proof.
       psatzl R.
 Qed.
 
+Ltac specialize_arith H :=
+  repeat match type of H with
+         | ?P -> _ =>
+           let X := fresh in
+           assert P as X by psatzl R;
+             specialize (H X); clear X
+         end.
+
+Ltac destruct_ite :=
+  match goal with
+  | [ |- context [ if ?e then _ else _ ] ]
+    => destruct e
+  end.
+
+Theorem StateFlow_induction :
+  forall (I O S : Type) (trans : S -> I -> S)
+         (out : S -> I -> O) (init : S)
+         (P : I -> S -> O -> Prop)
+         (i : Signal I) (o : Signal O),
+    StateFlow_ClosedLeft trans out init i o ->
+    P (i 0) init (out init (i 0)) ->
+    (forall i1 i2 s o, P i1 s o ->
+                       P i2 (trans s i2) (out (trans s i2) i2)) ->
+    exists st, forall t, 0 <= t -> P (i t) (st t) (o t).
+Proof.
+  intros I O S trans out init P i o Hst Hinit Hind.
+  unfold StateFlow_ClosedLeft in Hst.
+  destruct Hst as [st [Hst0 [Hout Htrans]]].
+  exists st. intros t Ht.
+  apply real_induction
+  with (P:=fun t => P (i t) (st t) (o t)).
+  - subst. rewrite <- Hout. assumption.
+  - intros. specialize (Htrans x H).
+    destruct Htrans as [eps [Hsp Htrans]].
+    assert (Rmax 0 (x - eps) < x).
+    { apply Rmax_lub_lt; psatzl R. }
+    assert (x - eps <= Rmax 0 (x - eps)) by apply Rmax_r.
+    assert (0 <= Rmax 0 (x - eps)) by apply Rmax_l.
+    specialize (Htrans (Rmax 0 (x - eps))). specialize_arith Htrans.
+    specialize (Hout x). rewrite Htrans in *.
+    rewrite <- Hout. eapply Hind.
+    specialize (H0 (Rmax 0 (x - eps))).
+    specialize_arith H0. eassumption.
+  - (* This case is unnecessary if we assume axiom of choice. *)
+    admit.
+  - assumption.
+Admitted.
+    
+
 (*
 Definition ind_inv1 (dtemp : Signal R) (t : R) :=
   (dtemp t = -1 \/ dtemp t = 1).
@@ -227,26 +276,21 @@ Proof.
   intuition; rewrite H2 in *; psatzl R.
 Qed.
 
-Ltac specialize_arith H :=
-  repeat match type of H with
-         | ?P -> _ =>
-           let X := fresh in
-           assert P as X by psatzl R;
-             specialize (H X); clear X
-         end.
-
-Ltac destruct_ite :=
-  match goal with
-  | [ |- context [ if ?e then _ else _ ] ]
-    => destruct e
-  end.
-
 Lemma ind_inv_Controller_ok :
   forall (temp : Signal R) (on : Signal bool),
     temp 0 < 1 ->
     Controller temp on ->
     forall t, 0 <= t -> ind_inv_Controller (temp t) (on t).
 Proof.
+  unfold Controller. intros.
+  edestruct StateFlow_induction.
+  instantiate (P:=fun i _ o => ind_inv_Controller i o).
+  - apply H0.
+  - compute. intuition psatzl R.
+  - compute. intros. repeat destruct_ite; intuition psatzl R.
+  - auto.
+(* Old proof without state flow rule *)
+(*
   cbv beta iota zeta delta - [ Rge Rle ]. intros temp on Hinit Hst.
   destruct Hst as [st [Hst0 [Hout Htrans]]]. intros.
   eapply real_induction
@@ -262,7 +306,8 @@ Proof.
   - (* This case is unnecessary if we assume axiom of choice. *)
     admit.
   - assumption.
-Admitted.
+*)
+Qed.
 
 Lemma ind_inv_Integrator_ok :
   forall (dtemp temp : Signal R),
