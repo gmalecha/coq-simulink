@@ -11,11 +11,17 @@ Definition Arrow (T U : Type) : Type :=
 Definition Pure {T U} (f : T -> U) : Arrow T U :=
   fun i o => forall t, o t = f (i t).
 
+Require Import Coquelicot.Coquelicot.
 Definition Integrator (init : R) : Arrow R R :=
+  fun i o =>
+    (* Is - init correct? *)
+    forall t, is_RInt i 0 t (o t - init).
+(*
   fun i o =>
     o 0 = init /\
     exists deriv_pf : forall {t}, t >= 0 -> derivable_pt o t,
       forall t (pf : t >= 0), i t = derive_pt o t (deriv_pf pf).
+*)
 
 Definition integrator_loop (init : R) (x : Signal R) : Prop :=
   Integrator init x x.
@@ -23,21 +29,31 @@ Definition integrator_loop (init : R) (x : Signal R) : Prop :=
 Lemma integrator_loop_exp :
   integrator_loop 1 Rtrigo_def.exp.
 Proof.
-  cbv beta iota zeta
-      delta - [ Rtrigo_def.exp Rge derive_pt derivable_pt ].
-  split.
-  - apply Rtrigo_def.exp_0.
-  - exists (fun _ _ => derivable_pt_exp _).
-    intros. rewrite derive_pt_exp. reflexivity.
+  unfold integrator_loop, Integrator. intros.
+  rewrite <- Rtrigo_def.exp_0.
+  apply is_RInt_exp.
 Qed.
 
 Definition Pcontroller (init : R) (x y : Signal R) : Prop :=
   Integrator init y x /\ Pure (Rmult (-1)) x y.
 
+Require Import Psatz.
 Lemma Pcontroller_solution :
   Pcontroller 1 (fun t => Rtrigo_def.exp (-t))
               (fun t => -Rtrigo_def.exp (-t)).
 Proof.
+  unfold Pcontroller, integrator_loop, Integrator.
+  split.
+  { intros. rewrite <- Rtrigo_def.exp_0. rewrite <- Ropp_0 at 2.
+    apply is_RInt_derive with (f:=fun x => exp (-x)).
+    { intros. auto_derive; auto. psatzl R. }
+    { intros. apply continuous_opp with (f:=fun x => exp (-x)).
+      admit. } }
+  { unfold Pure. intros. psatzl R. }
+Admitted.
+(*
+  { intros. SearchAbout is_RInt.
+    apply is_RInt_comp_opp.
   cbv beta iota zeta
       delta - [ Rtrigo_def.exp Rge derive_pt derivable_pt ].
   repeat split.
@@ -53,6 +69,7 @@ Proof.
     rewrite derive_pt_id. field.
   - intros. field.
 Qed.
+*)
 
 Definition StateFlow_ClosedRight {I O S : Type}
            (trans : S -> I -> S)
@@ -118,7 +135,6 @@ Proof.
 Qed.
 
 Require Import Coq.Logic.Classical.
-Require Import Psatz.
 Theorem real_induction :
   forall P : R -> Prop,
     P 0 ->
@@ -217,7 +233,23 @@ Proof.
     admit.
   - assumption.
 Admitted.
-    
+
+Theorem StateFlow_induction_stateless :
+  forall (I O S : Type) (trans : S -> I -> S)
+         (out : S -> I -> O) (init : S)
+         (P : I -> O -> Prop)
+         (i : Signal I) (o : Signal O),
+    StateFlow_ClosedLeft trans out init i o ->
+    P (i 0) (out init (i 0)) ->
+    (forall i1 i2 s o, P i1 o ->
+                       P i2 (out (trans s i2) i2)) ->
+    forall t, 0 <= t -> P (i t) (o t).
+Proof.
+  intros. eapply StateFlow_induction with (P:=fun i s o => P i o) in H.
+  { destruct H. apply H; auto. }
+  { assumption. }
+  { auto. }
+Qed.
 
 (*
 Definition ind_inv1 (dtemp : Signal R) (t : R) :=
@@ -283,12 +315,9 @@ Lemma ind_inv_Controller_ok :
     forall t, 0 <= t -> ind_inv_Controller (temp t) (on t).
 Proof.
   unfold Controller. intros.
-  edestruct StateFlow_induction.
-  instantiate (P:=fun i _ o => ind_inv_Controller i o).
-  - apply H0.
-  - compute. intuition psatzl R.
-  - compute. intros. repeat destruct_ite; intuition psatzl R.
-  - auto.
+  eapply StateFlow_induction_stateless; eauto.
+  { compute. intuition psatzl R. }
+  { compute. intros. repeat destruct_ite; try intuition psatzl R. }
 (* Old proof without state flow rule *)
 (*
   cbv beta iota zeta delta - [ Rge Rle ]. intros temp on Hinit Hst.
@@ -309,21 +338,37 @@ Proof.
 *)
 Qed.
 
-Lemma ind_inv_Integrator_ok :
-  forall (dtemp temp : Signal R),
-    Integrator 0 dtemp temp ->
-    forall t, 0 <= t -> ind_inv_Integrator (dtemp t) (temp t).
-Proof.
-  (* Need something like differential induction. *)
-Admitted.
-
 Lemma Integrator_init :
   forall s1 s2 init,
     Integrator init s1 s2 ->
     s2 0 = init.
 Proof.
-  unfold Integrator. intros. tauto.
+  unfold Integrator. intros.
+  specialize (H 0).
+  assert (is_RInt s1 0 0 zero) by apply is_RInt_point.
+  apply is_RInt_unique in H.
+  apply is_RInt_unique in H0. rewrite H in H0. unfold zero in *.
+  simpl in *. psatzl R.
 Qed.
+
+Lemma ind_inv_Integrator_ok :
+  forall (dtemp temp : Signal R),
+    Integrator 0 dtemp temp ->
+    (forall t, 0 <= t ->
+               (dtemp t = 1 /\ temp t < 1) \/
+               (dtemp t = -1 /\ -1 < temp t)) ->
+    forall t, 0 <= t -> ind_inv_Integrator (dtemp t) (temp t).
+Proof.
+  (* Need something like differential induction. *)
+  intros dtemp temp Hint H t Ht.
+  apply real_induction
+  with (P:=fun t => ind_inv_Integrator (dtemp t) (temp t)).
+  { compute. apply Integrator_init in Hint. psatzl R. }
+  { unfold ind_inv_Integrator, Integrator in *.
+    intros x Hx Hind. admit. }
+  { admit. }
+  { assumption. }
+Admitted.
 
 Lemma thermostat_in_range :
   forall temp on dtemp,
@@ -338,8 +383,9 @@ Proof.
     + apply Integrator_init in Hint; psatzl R.
     + eassumption.
     + assumption.
-  - apply ind_inv_Integrator_ok; assumption.
-Qed.
+  - apply ind_inv_Integrator_ok; try assumption.
+    admit.
+Admitted.
 (*
   intros temp on dtemp [Hswitch [Hint Hst]] t.
   cut (ind_inv temp dtemp t); [ apply ind_inv_safe | ].
