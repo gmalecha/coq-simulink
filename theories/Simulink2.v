@@ -142,7 +142,7 @@ Theorem real_induction :
                    (forall y : R, 0 <= y < x -> P y) -> P x) ->
     (forall x : R,
         0 <= x ->
-        P x ->
+        (forall t : R, 0 <= t <= x -> P t) ->
         exists y, x < y /\ forall z, x < z < y -> P z) ->
     forall x : R, 0 <= x -> P x.
 Proof.
@@ -165,7 +165,12 @@ Proof.
       intuition. }
     assert (P xglb \/ ~P xglb) by apply classic.
     destruct H0.
-    + specialize (I2 xglb H H0). destruct I2.
+    + specialize (I2 xglb H). destruct I2.
+      { intros. apply NNPP. intro.
+        assert (xglb <= t).
+        { unfold is_lower_bound in *. apply Hglb.
+          destruct H1. destruct H1; subst; tauto. }
+        destruct H1. destruct H4; subst; intuition psatzl R. }
       assert (is_lower_bound (fun x => 0 < x /\ ~P x) x).
       { unfold is_lower_bound in *. intros.
         assert (xglb <= x0) by (apply Hglb; assumption).
@@ -207,7 +212,7 @@ Theorem StateFlow_induction :
          (i : Signal I) (o : Signal O),
     StateFlow_ClosedLeft trans out init i o ->
     P (i 0) init (out init (i 0)) ->
-    (forall i1 i2 s o, P i1 s o ->
+    (forall i1 i2 s, P i1 s (out s i1) ->
                        P i2 (trans s i2) (out (trans s i2) i2)) ->
     exists st, forall t, 0 <= t -> P (i t) (st t) (o t).
 Proof.
@@ -224,11 +229,8 @@ Proof.
     { apply Rmax_lub_lt; psatzl R. }
     assert (x - eps <= Rmax 0 (x - eps)) by apply Rmax_r.
     assert (0 <= Rmax 0 (x - eps)) by apply Rmax_l.
-    specialize (Htrans (Rmax 0 (x - eps))). specialize_arith Htrans.
-    specialize (Hout x). rewrite Htrans in *.
-    rewrite <- Hout. eapply Hind.
-    specialize (H0 (Rmax 0 (x - eps))).
-    specialize_arith H0. eassumption.
+    rewrite <- Hout. erewrite Htrans; eauto. eapply Hind.
+    setoid_rewrite <- Hout in H0. eapply H0; eauto.
   - (* This case is unnecessary if we assume axiom of choice. *)
     admit.
   - assumption.
@@ -241,11 +243,12 @@ Theorem StateFlow_induction_stateless :
          (i : Signal I) (o : Signal O),
     StateFlow_ClosedLeft trans out init i o ->
     P (i 0) (out init (i 0)) ->
-    (forall i1 i2 s o, P i1 o ->
-                       P i2 (out (trans s i2) i2)) ->
+    (forall i1 i2 s, P i1 (out s i1) ->
+                     P i2 (out (trans s i2) i2)) ->
     forall t, 0 <= t -> P (i t) (o t).
 Proof.
-  intros. eapply StateFlow_induction with (P:=fun i s o => P i o) in H.
+  intros.
+  eapply StateFlow_induction with (P:=fun i s o => P i o) in H.
   { destruct H. apply H; auto. }
   { assumption. }
   { auto. }
@@ -270,9 +273,247 @@ Proof.
 Qed.
 *)
 
+Definition real_partition (int : nat -> nonnegreal) :=
+  nonneg (int 0%nat) = 0 /\
+  (forall (n : nat), int n < int (S n)) /\
+  (forall (t : R), exists n : nat, int n <= t < int (S n)).
+
+Definition StateFlow_intervals {I O ST : Type}
+           (trans : ST -> I -> ST)
+           (out : ST -> I -> O)
+           (init : ST)
+: Arrow I O :=
+  fun i o =>
+    exists st : nat -> (nonnegreal * ST),
+         snd (st 0%nat) = init
+      /\ real_partition (fun n => fst (st n))
+      /\ (forall (n : nat) (t : R),
+             fst (st n) <= t < fst (st (S n)) ->
+             o t = out (snd (st n)) (i t))
+      /\ (forall (n : nat),
+             snd (st (S n)) = trans (snd (st n)) (i (fst (st (S n)))))
+      /\ (forall (n : nat) (t : R),
+             fst (st n) <= t < fst (st (S n)) ->
+             snd (st n) = trans (snd (st n)) (i t)).
+
+Theorem real_interval_rule :
+  forall (P : R -> Prop) (int : nat -> nonnegreal),
+    real_partition int ->
+    (forall (n : nat),
+        (forall (t : R), int n <= t < int (S n) -> P t)) ->
+    forall x : R, 0 <= x -> P x.
+Proof.
+  intros P int Hord Hn x Hx. unfold real_partition in Hord.
+  destruct Hord as [Hord0 [Hord1 Hord2]].
+  specialize (Hord2 x). destruct Hord2 as [n Hord2].
+  eapply Hn; eauto.
+Qed.
+
+Theorem real_interval_induction :
+  forall (P : R -> Prop) (int : nat -> nonnegreal),
+    real_partition int ->
+    (forall (n : nat),
+        (forall (t : R), 0 <= t < int n -> P t) ->
+        (forall (t : R), int n <= t < int (S n) -> P t)) ->
+    forall x : R, 0 <= x -> P x.
+Proof.
+  intros. unfold real_partition in *.
+  decompose [and] H; clear H.
+  apply real_induction.
+  { apply (H0 0%nat).
+    { intros. rewrite H2 in *. psatzl R. }
+    { rewrite H2. specialize (H4 0%nat). psatzl R. } }
+  { intros. specialize (H5 x0). destruct H5.
+    eapply H0; eauto. intros.
+    apply H3. psatzl R. }
+  { intros. specialize (H5 x0). destruct H5.
+    exists (int (S x1)). split.
+    { tauto. }
+    { intros. apply H0 with (n:=x1); [ | psatzl R ].
+      intros. apply H3. psatzl R. } }
+  { assumption. }
+Qed.
+
+Lemma reals_dense :
+  forall (x y : R),
+    x < y ->
+    exists z : R, x < z < y.
+Proof.
+  intros x y Hxy.
+  pose proof (archimed (y - x)).
+Admitted.
+
+Lemma closed_continuous :
+  forall {T : UniformSpace} (D : T -> Prop),
+    closed D ->
+    forall (f : R -> T) (u l : R),
+      l < u ->
+      (forall r, l <= r < u -> D (f r)) ->
+      continuous f u ->
+      D (f u).
+Proof.
+  intros. apply NNPP; intro.
+  unfold closed, open, continuous, locally, filterlim,
+  filter_le, filtermap in *.
+  specialize (H _ H3). specialize (H2 _ H).
+  simpl in *. destruct H2 as [eps H2].
+  cbv beta iota zeta delta - [ not abs ] in H2.
+  destruct (reals_dense (Rmax l (u - eps)) u).
+  { destruct eps. simpl. unfold Rmax. destruct_ite; psatzl R. }
+  apply H2 with (y:=x) in H1; auto.
+  { destruct eps. simpl in *. compute.
+    destruct_ite; try psatzl R.
+    assert (u - pos < x).
+    { revert H4. unfold Rmax. destruct_ite; psatzl R. }
+    psatzl R. }
+  { revert H4. apply Rmax_case_strong; intros; psatzl R. }
+Qed.
+
+Theorem StateFlow_induction2 :
+  forall (I : UniformSpace) (O ST : Type) (trans : ST -> I -> ST)
+         (out : ST -> I -> O) (init : ST)
+         (P : I -> ST -> O -> Prop)
+         (i : Signal I) (o : Signal O),
+    StateFlow_intervals trans out init i o ->
+    (forall s o, closed (fun i => P i s (o s i))) ->
+    (forall t, 0 <= t -> continuous i t) ->
+    P (i 0) init (out init (i 0)) ->
+    (forall (s : ST) (l u : R),
+        (forall t, l <= t < u -> s = trans s (i t)) ->
+        (forall t, l <= t < u -> o t = out s (i t)) ->
+        P (i l) s (out s (i l)) ->
+        (forall t, l < t < u ->
+                   P (i t) s (out s (i t)))) ->
+    (forall i s, P i s (out s i) ->
+                 P i (trans s i) (out (trans s i) i)) ->
+    forall t, 0 <= t -> exists st, P (i t) st (o t).
+Proof.
+  intros I O ST trans out init P i o Hst Hclosed Hcont Hinit
+         Hind1 Hind2.
+  destruct Hst as [st [Hst0 [Hord [Hout [Htrans Hinner]]]]].
+  eapply real_interval_rule; eauto. intros. exists (snd (st n)).
+  destruct Hord as [Hord0 [Hord1 Hord2]]. simpl in *.
+  erewrite Hout; eauto.
+(*  assert (fst (st n) <= t <= fst (st (S n))) by psatzl R.
+  clear H. rename H0 into H.*) generalize dependent t.
+  induction n; intros.
+  { subst. repeat destruct H.
+    { eapply Hind1; eauto.
+      rewrite Hord0. assumption. }
+    { rewrite Hord0. assumption. } }
+  { assert (P (i (fst (st (S n)))) (snd (st (S n)))
+              (out (snd (st (S n))) (i (fst (st (S n)))))).
+    { rewrite Htrans. eapply Hind2.
+      eapply closed_continuous; eauto.
+      apply Hcont. destruct (fst (st (S n))).
+      simpl in *. assumption. }
+    repeat destruct H.
+    { eapply Hind1; eauto. }
+    { eauto. } }
+Qed.
+
+Theorem StateFlow_induction2_stateless :
+  forall (I : UniformSpace) (O ST : Type) (trans : ST -> I -> ST)
+         (out : ST -> I -> O) (init : ST)
+         (P : I -> O -> Prop)
+         (i : Signal I) (o : Signal O),
+    StateFlow_intervals trans out init i o ->
+    (forall o, closed (fun i => P i (o i))) ->
+    (forall t, 0 <= t -> continuous i t) ->
+    P (i 0) (out init (i 0)) ->
+    (forall (s : ST) (l u : R),
+        (forall t, l <= t < u -> s = trans s (i t)) ->
+        (forall t, l <= t < u -> o t = out s (i t)) ->
+        P (i l) (out s (i l)) ->
+        (forall t, l < t < u ->
+                   P (i t) (out s (i t)))) ->
+    (forall i s, P i (out s i) ->
+                 P i (out (trans s i) i)) ->
+    forall t, 0 <= t -> P (i t) (o t).
+Proof.
+  intros.
+  eapply StateFlow_induction2 with (P:=fun i _ o => P i o) in H;
+    eauto.
+  destruct H. apply H; auto.
+Qed.
+
+(*
+Theorem StateFlow_induction2 :
+  forall (I O S : Type) (trans : S -> I -> S)
+         (out : S -> I -> O) (init : S)
+         (P : I -> S -> O -> Prop)
+         (i : Signal I) (o : Signal O),
+    StateFlow_ClosedLeft trans out init i o ->
+    P (i 0) init (out init (i 0)) ->
+    (forall (s : S) (i : Signal I),
+        (forall t, 0 <= t -> trans s i = s) ->
+        (forall t, 0 <= t -> P (i t) s (out s (i t)))) ->
+    
+
+    (forall i1 i2 s o, P i1 s o ->
+                       o = out s i1 ->
+                       P i2 s o ->
+                       P i2 (trans s i2) (out (trans s i2) i2)) ->
+    exists st, forall t, 0 <= t -> P (i t) (st t) (o t).
+
+Theorem StateFlow_induction2 :
+  forall (I O S : Type) (trans : S -> I -> S)
+         (out : S -> I -> O) (init : S)
+         (P : I -> S -> O -> Prop)
+         (i : Signal I) (o : Signal O),
+    StateFlow_ClosedLeft trans out init i o ->
+    P (i 0) init (out init (i 0)) ->
+    (forall i1 i2 s o, P i1 s o ->
+                       o = out s i1 ->
+                       P i2 s o ->
+                       P i2 (trans s i2) (out (trans s i2) i2)) ->
+    exists st, forall t, 0 <= t -> P (i t) (st t) (o t).
+Proof.
+  intros I O S trans out init P i o Hst Hinit Hind.
+  unfold StateFlow_ClosedLeft in Hst.
+  destruct Hst as [st [Hst0 [Hout Htrans]]].
+  exists st. intros t Ht.
+  apply real_induction
+  with (P:=fun t => P (i t) (st t) (o t)).
+  { subst. rewrite <- Hout. assumption. }
+  { intros. specialize (Htrans x H).
+    destruct Htrans as [eps [Hsp Htrans]].
+    assert (Rmax 0 (x - eps) < x).
+    { apply Rmax_lub_lt; psatzl R. }
+    assert (x - eps <= Rmax 0 (x - eps)) by apply Rmax_r.
+    assert (0 <= Rmax 0 (x - eps)) by apply Rmax_l.
+    rewrite <- Hout. erewrite Htrans.
+    eapply Hind.
+    
+
+SearchAbout ball.
+Print ProperFilter.
+Lemma ProperFilter_forall_R :
+  ProperFilter (fun P
+Print R_complete_lim.
+SearchAbout is_lub_Rbar.
+SearchAbout Rbar_is_lub.
+
+
+SearchAbout R_complete_lim.
+    apply H0.
+
+    specialize (Htrans (Rmax 0 (x - eps))). specialize_arith Htrans.
+    pose proof (Hout x) as Houtx. rewrite Htrans in *.
+    rewrite <- Houtx. eapply Hind.
+    specialize (H0 (Rmax 0 (x - eps))).
+    specialize_arith H0.
+    + eassumption.
+    + symmetry. auto.
+  - (* This case is unnecessary if we assume axiom of choice. *)
+    admit.
+  - assumption.
+Admitted.
+*)
+
 Definition Controller (temp : Signal R) (on : Signal bool) :=
-  StateFlow_ClosedLeft
-    (I:=R) (S:=bool) (O:=bool)
+  StateFlow_intervals
+    (I:=R) (ST:=bool) (O:=bool)
     (fun s i => if s
                 then if Rge_dec i 1 then false else true
                 else if Rle_dec i (-1) then true else false)
@@ -308,16 +549,24 @@ Proof.
   intuition; rewrite H2 in *; psatzl R.
 Qed.
 
+(*
 Lemma ind_inv_Controller_ok :
   forall (temp : Signal R) (on : Signal bool),
-    temp 0 < 1 ->
+    temp 0 = 0 ->
     Controller temp on ->
     forall t, 0 <= t -> ind_inv_Controller (temp t) (on t).
 Proof.
   unfold Controller. intros.
-  eapply StateFlow_induction_stateless; eauto.
-  { compute. intuition psatzl R. }
-  { compute. intros. repeat destruct_ite; try intuition psatzl R. }
+  eapply StateFlow_induction2_stateless; eauto.
+  cbv beta iota zeta delta - [ Rge Rle ]. intros.
+  specialize (H2 t' H3). destruct s.
+  { destruct (Rge_dec (temp t') 1); try discriminate.
+    intuition psatzl R. }
+  { destruct (Rle_dec (temp t') (-1)); try discriminate.
+    intuition psatzl R. }
+Qed.
+*)
+
 (* Old proof without state flow rule *)
 (*
   cbv beta iota zeta delta - [ Rge Rle ]. intros temp on Hinit Hst.
@@ -336,7 +585,6 @@ Proof.
     admit.
   - assumption.
 *)
-Qed.
 
 Lemma Integrator_init :
   forall s1 s2 init,
@@ -351,6 +599,7 @@ Proof.
   simpl in *. psatzl R.
 Qed.
 
+(*
 Lemma ind_inv_Integrator_ok :
   forall (dtemp temp : Signal R),
     Integrator 0 dtemp temp ->
@@ -365,18 +614,71 @@ Proof.
   with (P:=fun t => ind_inv_Integrator (dtemp t) (temp t)).
   { compute. apply Integrator_init in Hint. psatzl R. }
   { unfold ind_inv_Integrator, Integrator in *.
-    intros x Hx Hind. admit. }
+    intros x Hx Hind. 
   { admit. }
   { assumption. }
 Admitted.
+*)
+
+Definition Controller2 (temp : Signal R) (dtemp : Signal R) :=
+  StateFlow_intervals
+    (I:=R) (ST:=bool) (O:=R)
+    (fun s i => if s
+                then if Rge_dec i 1 then false else true
+                else if Rle_dec i (-1) then true else false)
+    (fun s _ => if s then 1 else -1)
+    true temp dtemp.
+
+Definition thermostat2 (init : R) (temp : Signal R)
+           (dtemp : Signal R) :=
+  Integrator init dtemp temp /\
+  Controller2 temp dtemp.
 
 Lemma thermostat_in_range :
-  forall temp on dtemp,
-    thermostat 0 temp on dtemp ->
+  forall temp dtemp,
+    thermostat2 0 temp dtemp ->
     forall t, 0 <= t -> safe (temp t).
 Proof.
-  unfold thermostat. intros temp on dtemp Htherm t Ht.
-  destruct Htherm as [Hswitch [Hint Hcontrol]].
+  unfold thermostat2. intros temp dtemp Htherm t Ht.
+  destruct Htherm as [Hint Hcontrol].
+  unfold Controller2 in Hcontrol.
+  eapply StateFlow_induction2_stateless
+    with (P:=fun i o => safe i); eauto.
+  { admit. }
+  { admit. }
+  { apply Integrator_init in Hint. compute. psatzl R. }
+  { cbv beta iota zeta delta - [ Rge Rle ]. intros.
+    destruct s.
+    { split.
+      { admit. }
+      { specialize (H t0). specialize_arith H.
+        destruct (Rge_dec (temp t0) 1); try discriminate.
+        psatzl R. } }
+    { split.
+      { specialize (H t0). specialize_arith H.
+        destruct (Rle_dec (temp t0) (-1)); try discriminate.
+        psatzl R. }
+      { admit. } }
+Admitted.
+
+
+(*  assert (temp 0 = 0) as Hinit.
+  { apply Integrator_init in Hint; psatzl R. }
+  pose proof (ind_inv_Controller_ok temp on Hinit Hcontrol).*)
+  assert (ind_inv_Integrator (dtemp t) (temp t)).
+  { eapply StateFlow_induction2_stateless
+    with (P:=fun i o => ind_inv_Integrator o i); eauto.
+    cbv beta iota zeta delta - [ Rge Rle ]. intros.
+    destruct s.
+    { left. 
+      assert (forall t' : R, t0 <= t' < x -> temp t' < 1)
+        as Hctrl.
+      { intros. specialize (H _ H1).
+        destruct (Rge_dec (temp t'0) 1); try discriminate.
+        psatzl R. }
+      clear H Hcontrol. split; [ psatzl R | ].
+      
+      
   eapply ind_inv_safe; [ | assumption ]. split; [ | split ].
   - eassumption.
   - intros. apply ind_inv_Controller_ok.
