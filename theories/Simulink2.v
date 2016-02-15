@@ -14,8 +14,7 @@ Definition Pure {T U} (f : T -> U) : Arrow T U :=
 Require Import Coquelicot.Coquelicot.
 Definition Integrator (init : R) : Arrow R R :=
   fun i o =>
-    (* Is - init correct? *)
-    forall t, is_RInt i 0 t (o t - init).
+    forall t, 0 <= t -> is_RInt i 0 t (o t - init).
 (*
   fun i o =>
     o 0 = init /\
@@ -340,8 +339,22 @@ Lemma reals_dense :
     exists z : R, x < z < y.
 Proof.
   intros x y Hxy.
-  pose proof (archimed (y - x)).
-Admitted.
+  pose proof (archimed (1/(y - x))).
+  destruct H. clear H0.
+  generalize dependent (IZR (up (1 / (y - x)))). intros n H.
+  pose proof (archimed (n * x)). destruct H0.
+  generalize dependent (IZR (up (n * x))). intros m H0 H1.
+  exists (m / n).
+  assert ((y - x) * / (y - x) = 1) by (apply Rinv_r; psatzl R).
+  assert ((y - x) * n > 1).
+  { unfold Rdiv in *. rewrite Rmult_1_l in *. psatz R. }
+  cut (n * x < m < n * y).
+  { assert (n * / n = 1) by (apply Rinv_r; psatz R).
+    intros. unfold Rdiv. generalize dependent (/n). intros.
+    assert (n > 0) by psatz R.
+    clear - H4 H5 H6. split; psatz R. }
+  { psatz R. }
+Qed.
 
 Lemma closed_continuous :
   forall {T : UniformSpace} (D : T -> Prop),
@@ -369,6 +382,17 @@ Proof.
   { revert H4. apply Rmax_case_strong; intros; psatzl R. }
 Qed.
 
+Lemma real_partition_pos :
+  forall int n,
+    real_partition int ->
+    0 < int (S n).
+Proof.
+  intros. unfold real_partition in H. destruct H as [H0 [Hsuc ?]].
+  induction n.
+  { specialize (Hsuc 0%nat). psatzl R. }
+  { specialize (Hsuc (S n)). psatzl R. }
+Qed.
+
 Theorem StateFlow_induction2 :
   forall (I : UniformSpace) (O ST : Type) (trans : ST -> I -> ST)
          (out : ST -> I -> O) (init : ST)
@@ -376,9 +400,10 @@ Theorem StateFlow_induction2 :
          (i : Signal I) (o : Signal O),
     StateFlow_intervals trans out init i o ->
     (forall s o, closed (fun i => P i s (o s i))) ->
-    (forall t, 0 <= t -> continuous i t) ->
+    (forall t, 0 < t -> continuous i t) ->
     P (i 0) init (out init (i 0)) ->
     (forall (s : ST) (l u : R),
+        0 <= l ->
         (forall t, l <= t < u -> s = trans s (i t)) ->
         (forall t, l <= t < u -> o t = out s (i t)) ->
         P (i l) s (out s (i l)) ->
@@ -393,22 +418,24 @@ Proof.
   destruct Hst as [st [Hst0 [Hord [Hout [Htrans Hinner]]]]].
   eapply real_interval_rule; eauto. intros. exists (snd (st n)).
   destruct Hord as [Hord0 [Hord1 Hord2]]. simpl in *.
-  erewrite Hout; eauto.
-(*  assert (fst (st n) <= t <= fst (st (S n))) by psatzl R.
-  clear H. rename H0 into H.*) generalize dependent t.
+  erewrite Hout; eauto. generalize dependent t.
   induction n; intros.
   { subst. repeat destruct H.
-    { eapply Hind1; eauto.
+    { eapply Hind1; eauto; try psatzl R.
       rewrite Hord0. assumption. }
     { rewrite Hord0. assumption. } }
   { assert (P (i (fst (st (S n)))) (snd (st (S n)))
               (out (snd (st (S n))) (i (fst (st (S n)))))).
     { rewrite Htrans. eapply Hind2.
-      eapply closed_continuous; eauto.
-      apply Hcont. destruct (fst (st (S n))).
-      simpl in *. assumption. }
+      eapply closed_continuous; eauto. apply Hcont.
+      eapply real_partition_pos with (int:=fun n => fst (st n)).
+      unfold real_partition; tauto. }
     repeat destruct H.
-    { eapply Hind1; eauto. }
+    { eapply Hind1; eauto.
+      pose proof (real_partition_pos (fun n => fst (st n)) n).
+      assert (real_partition (fun n : nat => fst (st n)))
+        by (unfold real_partition; tauto).
+      intuition psatzl R. }
     { eauto. } }
 Qed.
 
@@ -419,9 +446,10 @@ Theorem StateFlow_induction2_stateless :
          (i : Signal I) (o : Signal O),
     StateFlow_intervals trans out init i o ->
     (forall o, closed (fun i => P i (o i))) ->
-    (forall t, 0 <= t -> continuous i t) ->
+    (forall t, 0 < t -> continuous i t) ->
     P (i 0) (out init (i 0)) ->
     (forall (s : ST) (l u : R),
+        0 <= l ->
         (forall t, l <= t < u -> s = trans s (i t)) ->
         (forall t, l <= t < u -> o t = out s (i t)) ->
         P (i l) (out s (i l)) ->
@@ -594,7 +622,7 @@ Proof.
   unfold Integrator. intros.
   specialize (H 0).
   assert (is_RInt s1 0 0 zero) by apply is_RInt_point.
-  apply is_RInt_unique in H.
+  apply is_RInt_unique in H; try psatzl R.
   apply is_RInt_unique in H0. rewrite H in H0. unfold zero in *.
   simpl in *. psatzl R.
 Qed.
@@ -634,6 +662,110 @@ Definition thermostat2 (init : R) (temp : Signal R)
   Integrator init dtemp temp /\
   Controller2 temp dtemp.
 
+Lemma closed_le_r :
+  forall (a : R),
+    closed (fun x => a <= x).
+Proof.
+  unfold closed. intros. eapply open_ext.
+  { intros. split.
+    { apply Rlt_not_le. }
+    { simpl. psatzl R. } }
+  { apply open_lt. }
+Qed.
+
+Lemma closed_le_l :
+  forall (a : R),
+    closed (fun x => x <= a).
+Proof.
+  unfold closed. intros. eapply open_ext.
+  { intros. split.
+    { apply Rgt_not_le. }
+    { simpl. psatzl R. } }
+  { apply open_gt. }
+Qed.
+
+Lemma closed_ge_r :
+  forall (a : R),
+    closed (fun x => a >= x).
+Proof.
+  unfold closed. intros. eapply open_ext.
+  { intros. split.
+    { apply Rgt_not_ge. }
+    { simpl. psatzl R. } }
+  { apply open_gt. }
+Qed.
+
+Lemma closed_ge_l :
+  forall (a : R),
+    closed (fun x => x >= a).
+Proof.
+  unfold closed. intros. eapply open_ext.
+  { intros. split.
+    { apply Rlt_not_ge. }
+    { simpl. psatzl R. } }
+  { apply open_lt. }
+Qed.
+
+Ltac prove_closed :=
+  repeat first [ apply closed_true |
+                 apply closed_false |
+                 apply closed_ge_r |
+                 apply closed_le_r |
+                 apply closed_ge_l |
+                 apply closed_le_l |
+                 apply closed_and |
+                 apply closed_or ].
+
+Require Import Coq.Classes.RelationClasses.
+Require Import RIneq.
+Global Instance Reflexive_Rge : Reflexive Rge.
+Proof.
+  red. intro. apply Req_ge. reflexivity.
+Qed.
+
+Global Instance Reflexive_Rle : Reflexive Rle.
+Proof.
+  red. intro. apply Req_ge. reflexivity.
+Qed.
+
+Require Import Setoid Relation_Definitions Reals.
+Local Open Scope R.
+
+Add Parametric Relation : R Rle
+reflexivity proved by Rle_refl
+transitivity proved by Rle_trans
+as Rle_setoid_relation.
+
+Add Parametric Morphism : Rplus with
+signature Rle ++> Rle ++> Rle as Rplus_Rle_mor.
+intros ; apply Rplus_le_compat ; assumption.
+Qed.
+
+Add Parametric Morphism : Rminus with
+signature Rle ++> Rle --> Rle as Rminus_Rle_mor.
+intros ; unfold Rminus ;
+apply Rplus_le_compat;
+[assumption | apply Ropp_le_contravar ; assumption].
+Qed.
+
+Ltac simpl_Rmax :=
+  repeat first [rewrite Rbasic_fun.Rmax_left in * by psatzl R |
+                rewrite Rbasic_fun.Rmax_right in * by psatzl R ].
+
+Ltac simpl_Rmin :=
+  repeat first [rewrite Rbasic_fun.Rmin_left in * by psatzl R |
+                rewrite Rbasic_fun.Rmin_right in * by psatzl R ].
+
+Lemma is_RInt_unique_eq :
+  forall (f : R -> R) a b l1 l2,
+    is_RInt f a b l1 ->
+    is_RInt f a b l2 ->
+    l1 = l2.
+Proof.
+  intros. apply is_RInt_unique in H. apply is_RInt_unique in H0.
+  congruence.
+Qed.
+
 Lemma thermostat_in_range :
   forall temp dtemp,
     thermostat2 0 temp dtemp ->
@@ -644,92 +776,54 @@ Proof.
   unfold Controller2 in Hcontrol.
   eapply StateFlow_induction2_stateless
     with (P:=fun i o => safe i); eauto.
-  { admit. }
-  { admit. }
+  { intros. prove_closed. }
+  { intros. eapply (continuous_RInt_1 dtemp).
+    simpl. unfold locally. simpl. unfold Integrator in Hint.
+    setoid_rewrite Rminus_0_r in Hint.
+    exists {| pos:=t0; cond_pos:=H |}. intros.
+    apply Hint. compute in H0. revert H0.
+    destruct_ite; intros; psatzl R. }
   { apply Integrator_init in Hint. compute. psatzl R. }
   { cbv beta iota zeta delta - [ Rge Rle ]. intros.
     destruct s.
     { split.
-      { admit. }
-      { specialize (H t0). specialize_arith H.
+      { unfold Integrator in Hint.
+        setoid_rewrite Rminus_0_r in Hint.
+        pose proof (Hint l) as Hint_l.
+        pose proof (Hint t0) as Hint_t0.
+        specialize_arith Hint_l. specialize_arith Hint_t0.
+        pose proof (is_RInt_const l t0 1) as Hint_l_t0.
+        unfold scal in Hint_l_t0. simpl in Hint_l_t0.
+        unfold mult in Hint_l_t0. simpl in Hint_l_t0.
+        rewrite Rmult_1_r in Hint_l_t0.
+        assert (is_RInt dtemp 0 t0 (temp l + (t0 - l))).
+        { apply (is_RInt_Chasles dtemp 0 l t0); auto.
+          apply is_RInt_ext with (f:=fun _ : R => 1); auto.
+          intros. rewrite H1; auto. simpl_Rmax. simpl_Rmin.
+          psatzl R. }
+        erewrite is_RInt_unique_eq; eauto. psatzl R. }
+      { specialize (H0 t0). specialize_arith H0.
         destruct (Rge_dec (temp t0) 1); try discriminate.
         psatzl R. } }
     { split.
-      { specialize (H t0). specialize_arith H.
+      { specialize (H0 t0). specialize_arith H0.
         destruct (Rle_dec (temp t0) (-1)); try discriminate.
         psatzl R. }
-      { admit. } }
-Admitted.
-
-
-(*  assert (temp 0 = 0) as Hinit.
-  { apply Integrator_init in Hint; psatzl R. }
-  pose proof (ind_inv_Controller_ok temp on Hinit Hcontrol).*)
-  assert (ind_inv_Integrator (dtemp t) (temp t)).
-  { eapply StateFlow_induction2_stateless
-    with (P:=fun i o => ind_inv_Integrator o i); eauto.
-    cbv beta iota zeta delta - [ Rge Rle ]. intros.
-    destruct s.
-    { left. 
-      assert (forall t' : R, t0 <= t' < x -> temp t' < 1)
-        as Hctrl.
-      { intros. specialize (H _ H1).
-        destruct (Rge_dec (temp t'0) 1); try discriminate.
-        psatzl R. }
-      clear H Hcontrol. split; [ psatzl R | ].
-      
-      
-  eapply ind_inv_safe; [ | assumption ]. split; [ | split ].
-  - eassumption.
-  - intros. apply ind_inv_Controller_ok.
-    + apply Integrator_init in Hint; psatzl R.
-    + eassumption.
-    + assumption.
-  - apply ind_inv_Integrator_ok; try assumption.
-    admit.
-Admitted.
-(*
-  intros temp on dtemp [Hswitch [Hint Hst]] t.
-  cut (ind_inv temp dtemp t); [ apply ind_inv_safe | ].
-  cbv beta iota zeta
-      delta - [ Rge Rle derive_pt derivable_pt ] in *.
-  split.
-  { specialize (Hswitch t). destruct (on t); tauto. }
-  destruct Hst as [st [Hst0 [Hst_out Hst]]].
-  eapply real_induction with (P:=ind_inv2 temp dtemp);
-    cbv beta iota zeta delta - [ Rge Rle ].
-  - specialize (Hst_out 0). specialize (Hswitch 0).
-    rewrite Hst0 in *. rewrite <- Hst_out in *. rewrite Hswitch.
-    psatzl R.
-  - intros. split; intros.
-    + specialize (Hst x H). destruct Hst as [eps [Heps Hst]].
-      specialize (Hst (Rmax 0 (x - eps))).
-      match goal with
-      | H : ?P -> _ |- _ =>
-        match type of P with
-        | Prop =>
-          let X := fresh in
-          assert P as X by admit ;
-            specialize (H X)
-        end
-      end.
-      repeat rewrite Hst_out in *; clear Hst_out.
-      repeat rewrite Hswitch in *.
-      destruct (on x) eqn:?; try solve [ psatzl R ].
-      destruct (on (Rmax 0 (x - eps))) eqn:?.
-      { destruct (Rge_dec (temp x) 1); try congruence.
-        split; [| psatzl R].
-        specialize (H0 (Rmax 0 (x - eps))).
-        destruct H0. admit.
-        rewrite Hswitch in *.
-        rewrite Heqb0 in *.
-        specialize (H0 eq_refl).
-        setoid_rewrite Hswitch in Hint.
-        destruct Hint.
-        destruct H5.
-        admit. }
-      { destruct (Rle_dec (temp x) (-1)); try congruence.
-        
-        
-Admitted.
-*)
+      { unfold Integrator in Hint.
+        setoid_rewrite Rminus_0_r in Hint.
+        pose proof (Hint l) as Hint_l.
+        pose proof (Hint t0) as Hint_t0.
+        specialize_arith Hint_l. specialize_arith Hint_t0.
+        pose proof (is_RInt_const l t0 (-1)) as Hint_l_t0.
+        unfold scal in Hint_l_t0. simpl in Hint_l_t0.
+        unfold mult in Hint_l_t0. simpl in Hint_l_t0.
+        rewrite <- Ropp_mult_distr_r in Hint_l_t0.
+        rewrite Rmult_1_r in Hint_l_t0.
+        assert (is_RInt dtemp 0 t0 (temp l - (t0 - l))).
+        { apply (is_RInt_Chasles dtemp 0 l t0); auto.
+          apply is_RInt_ext with (f:=fun _ : R => -1); auto.
+          intros. rewrite H1; auto. simpl_Rmax. simpl_Rmin.
+          psatzl R. }
+        erewrite is_RInt_unique_eq with (l1:=temp t0); eauto.
+        psatzl R. } } }
+Qed.
